@@ -1,168 +1,256 @@
-require('dotenv').config()
-const { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys')
-const P = require('pino')
+require('dotenv').config();
+const { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const P = require('pino');
 
-// ======= Data =======
-const serviceSynonyms = {
-  "Academic Support": ["tutoring", "homework", "assignment", "study help"],
+// ======= Service Data =======
+const SERVICE_OPTIONS = {
+  "Academic Support": ["tutoring", "homework help", "assignment"],
   "Digital Services": ["printing", "design", "video editing"],
-  "Home Services": ["cleaning", "laundry", "cooking", "hair"],
+  "Home Services": ["cleaning", "laundry", "cooking", "hair styling"],
   "Farming Services": ["farming", "gardening"]
-}
-const housingCategories = ["Hostel", "Lodge", "Apartment", "Squat"]
-const campusLocations = ["Abuja Campus", "Delta Campus", "Choba Campus", "Alakiah", "Choba", "Ozuoba", "Aluu"]
+};
 
-const intentMap = {
-  info: ["information", "info", "events", "academic", "support"],
-  services: ["service", "order", "hire", "clean", "laundry", "hair", "farming"],
-  housing: ["house", "apartment", "hostel", "lodge", "rent"]
-}
+const HOUSING_OPTIONS = ["Hostel", "Lodge", "Apartment", "Squat"];
+const CAMPUS_LOCATIONS = ["Abuja Campus", "Delta Campus", "Choba Campus", "Alakiah", "Choba", "Ozuoba", "Aluu"];
 
-// ======= Helpers =======
-function detectIntent(text) {
-  text = text.toLowerCase()
-  for (const [intent, keywords] of Object.entries(intentMap)) {
-    if (keywords.some(word => text.includes(word))) return intent
-  }
-  return null
-}
-function detectService(text) {
-  text = text.toLowerCase()
-  for (const category in serviceSynonyms) {
-    if ([category.toLowerCase(), ...(serviceSynonyms[category] || [])].some(word => text.includes(word))) {
-      return category
-    }
-  }
-  return null
-}
-function detectHousingCategory(text) {
-  return housingCategories.find(cat => text.toLowerCase().includes(cat.toLowerCase())) || null
-}
-function detectLocation(text) {
-  return campusLocations.find(loc => text.toLowerCase().includes(loc.toLowerCase())) || null
-}
+// ======= Main Function =======
+async function startUniHubBot() {
+  // Initialize WhatsApp connection
+  const { state, saveCreds } = await useMultiFileAuthState('./session');
+  const { version } = await fetchLatestBaileysVersion();
 
-// ======= Bot =======
-async function startBot() {
-  const { state, saveCreds } = await useMultiFileAuthState('./session')
-  const { version } = await fetchLatestBaileysVersion()
-
-  const sock = makeWASocket({
+  const whatsapp = makeWASocket({
     version,
     auth: state,
-    logger: P({ level: 'silent' })
-  })
+    logger: P({ level: 'silent' }),
+    printQRInTerminal: true
+  });
 
-  let userSessions = {}
+  const userSessions = {};
 
-  sock.ev.on('connection.update', ({ connection }) => {
-    if (connection === 'open') console.log("✅ UniHub Bot Connected!")
-  })
-  sock.ev.on('creds.update', saveCreds)
+  // Connection events
+  whatsapp.ev.on('connection.update', ({ connection }) => {
+    if (connection === 'open') console.log("✅ UniHub Bot Connected!");
+  });
+  whatsapp.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('messages.upsert', async m => {
-    const msg = m.messages[0]
-    if (!msg.message || msg.key.fromMe) return
+  // Message handling
+  whatsapp.ev.on('messages.upsert', async ({ messages }) => {
+    const message = messages[0];
+    if (!message.message || message.key.fromMe) return;
 
-    const sender = msg.key.remoteJid
-    const textRaw = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim()
-    if (!textRaw) return
+    const userID = message.key.remoteJid;
+    const userInput = (
+      message.message.conversation || 
+      message.message.extendedTextMessage?.text || 
+      ""
+    ).trim().toLowerCase();
 
-    if (!userSessions[sender]) {
-      userSessions[sender] = { step: "welcome", data: {} }
-      // Send welcome menu
-      await sock.sendMessage(sender, {
-        text: `👋 Welcome to *UniHub*!  
-Your one-stop platform for campus life.  
+    if (!userInput) return;
 
-📚 *Services:* ${Object.keys(serviceSynonyms).length} categories  
-🏠 *Housing:* ${housingCategories.length} options  
-📍 *Locations Covered:* ${campusLocations.length}  
-
-How can I help you today?`,
-        buttons: [
-          { buttonId: "info", buttonText: { displayText: "ℹ️ Get Info" }, type: 1 },
-          { buttonId: "services", buttonText: { displayText: "🛠 Order Service" }, type: 1 },
-          { buttonId: "housing", buttonText: { displayText: "🏠 Get Housing" }, type: 1 }
-        ]
-      })
-      return
+    // Initialize new user session
+    if (!userSessions[userID]) {
+      userSessions[userID] = { step: "welcome", data: {} };
+      return sendWelcomeMessage(userID);
     }
 
-    const session = userSessions[sender]
-    const intent = detectIntent(textRaw)
-    const service = detectService(textRaw)
-    const housing = detectHousingCategory(textRaw)
-    const location = detectLocation(textRaw)
-
-    if (intent) session.data.intent = intent
-    if (service) session.data.service = service
-    if (housing) session.data.housing = housing
-    if (location) session.data.location = location
-
-    if ((service || housing) && location) {
-      await sock.sendMessage(sender, {
-        text: `I understood your request as:\n\nIntent: ${session.data.intent || "unknown"}\nService/Housing: ${service || housing}\nLocation: ${location}\n\nConfirm?`,
-        buttons: [
-          { buttonId: "yes", buttonText: { displayText: "✅ Yes" }, type: 1 },
-          { buttonId: "no", buttonText: { displayText: "❌ No" }, type: 1 }
-        ]
-      })
-      session.step = "confirm"
-      return
+    const session = userSessions[userID];
+    
+    // Handle help requests at any point
+    if (userInput.includes('help') || userInput === '0') {
+      session.step = "welcome";
+      return sendWelcomeMessage(userID);
     }
 
-    if (!session.data.intent) {
-      session.step = "menu"
-      await sock.sendMessage(sender, {
-        text: "Please choose an option:",
-        buttons: [
-          { buttonId: "info", buttonText: { displayText: "ℹ️ Get Info" }, type: 1 },
-          { buttonId: "services", buttonText: { displayText: "🛠 Order Service" }, type: 1 },
-          { buttonId: "housing", buttonText: { displayText: "🏠 Get Housing" }, type: 1 }
-        ]
-      })
-      return
+    // Handle conversation flow
+    switch (session.step) {
+      case "welcome":
+        await handleWelcomeResponse(userID, userInput);
+        break;
+      case "service_selection":
+        case "housing_selection":
+        await handleCategoryResponse(userID, userInput, session);
+        break;
+      case "location_selection":
+        await handleLocationResponse(userID, userInput, session);
+        break;
+      case "confirmation":
+        await handleConfirmation(userID, userInput, session);
+        break;
+      default:
+        await sendErrorMessage(userID);
     }
+  });
 
-    if (session.data.intent === "services" && !session.data.service) {
-      session.step = "selectService"
-      await sock.sendMessage(sender, {
-        text: "Which service do you need?",
-        buttons: Object.keys(serviceSynonyms).map(s => ({ buttonId: s, buttonText: { displayText: s }, type: 1 }))
-      })
-      return
+  // ======= Messaging Functions =======
+  async function sendWelcomeMessage(userID) {
+    await whatsapp.sendMessage(userID, {
+      text: `🌟 *Welcome to UniHub!* 🌟\n
+Your campus companion for:\n
+📚 *Academic Services* (${Object.keys(SERVICE_OPTIONS).length} categories)
+🏠 *Housing Options* (${HOUSING_OPTIONS.length} types)
+📍 *Campus Coverage* (${CAMPUS_LOCATIONS.length} locations)\n
+How can I assist you today? Reply with:\n
+1. *Services* - To order campus services
+2. *Housing* - To find accommodation
+3. *Help* - To see this menu again`,
+      buttons: [
+        { buttonId: 'services', buttonText: { displayText: '📚 Order Services' } },
+        { buttonId: 'housing', buttonText: { displayText: '🏠 Find Housing' } },
+        { buttonId: 'help', buttonText: { displayText: '❓ Get Help' } }
+      ]
+    });
+  }
+
+  async function handleWelcomeResponse(userID, input) {
+    const session = userSessions[userID];
+    
+    if (input.includes('service') || input === '1') {
+      session.step = "service_selection";
+      session.data.intent = "services";
+      return requestServiceSelection(userID);
     }
-
-    if (session.data.intent === "housing" && !session.data.housing) {
-      session.step = "selectHousing"
-      await sock.sendMessage(sender, {
-        text: "Which housing category?",
-        buttons: housingCategories.map(s => ({ buttonId: s, buttonText: { displayText: s }, type: 1 }))
-      })
-      return
+    
+    if (input.includes('housing') || input.includes('hostel') || input === '2') {
+      session.step = "housing_selection";
+      session.data.intent = "housing";
+      return requestHousingSelection(userID);
     }
+    
+    // Default to welcome message for unclear responses
+    await whatsapp.sendMessage(userID, { 
+      text: "I didn't quite catch that. Let's try again!"
+    });
+    return sendWelcomeMessage(userID);
+  }
 
-    if (!session.data.location) {
-      session.step = "selectLocation"
-      await sock.sendMessage(sender, {
-        text: "Which campus/location?",
-        buttons: campusLocations.map(s => ({ buttonId: s, buttonText: { displayText: s }, type: 1 }))
-      })
-      return
-    }
+  async function requestServiceSelection(userID) {
+    await whatsapp.sendMessage(userID, {
+      text: "📋 Please choose a service category:",
+      buttons: Object.keys(SERVICE_OPTIONS).map(service => ({
+        buttonId: service,
+        buttonText: { displayText: service }
+      }))
+    });
+  }
 
-    if (session.step === "confirm") {
-      if (["yes", "y"].includes(textRaw.toLowerCase())) {
-        await sock.sendMessage(sender, { text: "✅ Request confirmed! Someone will reach out soon." })
-        userSessions[sender] = { step: "menu", data: {} }
-      } else {
-        await sock.sendMessage(sender, { text: "❌ Cancelled. Returning to main menu." })
-        userSessions[sender] = { step: "menu", data: {} }
+  async function requestHousingSelection(userID) {
+    await whatsapp.sendMessage(userID, {
+      text: "🏘️ What type of housing are you looking for?",
+      buttons: HOUSING_OPTIONS.map(type => ({
+        buttonId: type,
+        buttonText: { displayText: type }
+      }))
+    });
+  }
+
+  async function handleCategoryResponse(userID, input, session) {
+    // Service selection handling
+    if (session.step === "service_selection") {
+      const selectedService = Object.keys(SERVICE_OPTIONS).find(
+        service => service.toLowerCase().includes(input) || 
+        SERVICE_OPTIONS[service].some(syn => input.includes(syn))
+      );
+
+      if (selectedService) {
+        session.data.service = selectedService;
+        session.step = "location_selection";
+        return requestLocation(userID);
       }
     }
-  })
+    
+    // Housing selection handling
+    if (session.step === "housing_selection") {
+      const selectedHousing = HOUSING_OPTIONS.find(
+        option => input.includes(option.toLowerCase())
+      );
+
+      if (selectedHousing) {
+        session.data.housing = selectedHousing;
+        session.step = "location_selection";
+        return requestLocation(userID);
+      }
+    }
+
+    // Handle invalid selection
+    await whatsapp.sendMessage(userID, {
+      text: "⚠️ Invalid selection. Please choose from the options below:"
+    });
+    
+    if (session.step === "service_selection") return requestServiceSelection(userID);
+    if (session.step === "housing_selection") return requestHousingSelection(userID);
+  }
+
+  async function requestLocation(userID) {
+    await whatsapp.sendMessage(userID, {
+      text: "📍 Please select your campus location:",
+      buttons: CAMPUS_LOCATIONS.map(location => ({
+        buttonId: location,
+        buttonText: { displayText: location }
+      }))
+    });
+  }
+
+  async function handleLocationResponse(userID, input, session) {
+    const selectedLocation = CAMPUS_LOCATIONS.find(
+      location => input.includes(location.toLowerCase())
+    );
+
+    if (selectedLocation) {
+      session.data.location = selectedLocation;
+      session.step = "confirmation";
+      return sendConfirmationRequest(userID, session.data);
+    }
+
+    // Handle invalid location
+    await whatsapp.sendMessage(userID, {
+      text: "🚫 Location not recognized. Please choose from the options below:"
+    });
+    return requestLocation(userID);
+  }
+
+  async function sendConfirmationRequest(userID, data) {
+    let serviceInfo = "";
+    if (data.intent === "services") {
+      serviceInfo = `Service: ${data.service}`;
+    } else {
+      serviceInfo = `Housing: ${data.housing}`;
+    }
+
+    await whatsapp.sendMessage(userID, {
+      text: `✅ Please confirm your request:\n\n${serviceInfo}\nLocation: ${data.location}\n\nIs this correct?`,
+      buttons: [
+        { buttonId: 'confirm_yes', buttonText: { displayText: '👍 Yes, Confirm' } },
+        { buttonId: 'confirm_no', buttonText: { displayText: '👎 No, Restart' } }
+      ]
+    });
+  }
+
+  async function handleConfirmation(userID, input, session) {
+    if (input.includes('yes') || input.includes('confirm')) {
+      await whatsapp.sendMessage(userID, { 
+        text: "🎉 Request confirmed! Our team will contact you shortly.\n\nType *help* anytime to start over."
+      });
+      // Reset session
+      userSessions[userID] = { step: "welcome", data: {} };
+    } else {
+      await whatsapp.sendMessage(userID, { 
+        text: "🔄 Let's start over. What would you like to do?"
+      });
+      // Reset session
+      userSessions[userID] = { step: "welcome", data: {} };
+      return sendWelcomeMessage(userID);
+    }
+  }
+
+  async function sendErrorMessage(userID) {
+    await whatsapp.sendMessage(userID, {
+      text: "❌ Something went wrong. Please try again or type *help* for assistance."
+    });
+    return sendWelcomeMessage(userID);
+  }
 }
 
-setInterval(() => {}, 1 << 30)
-startBot()
+// Start the bot
+startUniHubBot();
+setInterval(() => {}, 1 << 30); // Keep process running
