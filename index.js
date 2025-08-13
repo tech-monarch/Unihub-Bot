@@ -157,7 +157,7 @@ async function startUniHubBot() {
     await whatsapp.sendMessage(userID, {
       text: `🌟 *UniHub Main Menu* 🌟\n
 Your campus services assistant:\n
-ℹ️ Campus Information
+ℹ️ Campus Information/NEWS
 📚 Academic Support
 💻 Digital Services
 🍳 Cooking Services
@@ -226,7 +226,7 @@ Your campus services assistant:\n
   async function sendWelcomeMessage(userID) {
     // First message: Welcome text
     await whatsapp.sendMessage(userID, {
-      text: `👋 *Welcome to UniHub Campus Assistant!*\n\nI'm your one-stop solution for campus services and information.`
+      text: `👋 *Welcome to UniHub Campus Assistant!*\n\nI'm your one-stop solution for campus services and information/NEWS.`
     });
 
     // Second message: Options with footer
