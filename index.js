@@ -157,6 +157,7 @@ async function startUniHubBot() {
     await whatsapp.sendMessage(userID, {
       text: `🌟 *UniHub Main Menu* 🌟\n
 Your campus services assistant:\n
+ℹ️ Campus Information
 📚 Academic Support
 💻 Digital Services
 🍳 Cooking Services
@@ -164,17 +165,16 @@ Your campus services assistant:\n
 🧹 Home Cleaning
 💇 Hair Styling
 🌱 Farming Services
-🏠 Housing Solutions
-ℹ️ Campus Information`
+🏠 Housing Solutions`
     });
 
     // Second message: Action prompt
     await whatsapp.sendMessage(userID, {
       text: `🔍 *How can I assist you today?*\nChoose an option or describe your need:`,
       buttons: [
+        { buttonId: 'info', buttonText: { displayText: 'ℹ️ Campus Info' } },
         { buttonId: 'services', buttonText: { displayText: '🔧 Services' } },
         { buttonId: 'housing', buttonText: { displayText: '🏠 Housing' } },
-        { buttonId: 'info', buttonText: { displayText: 'ℹ️ Campus Info' } }
       ],
       footer: "💡 Type '0' to restart • 'menu' for options"
     });
@@ -233,9 +233,9 @@ Your campus services assistant:\n
     await whatsapp.sendMessage(userID, {
       text: `💡 *How can I help you today?*`,
       buttons: [
+        { buttonId: 'info', buttonText: { displayText: 'ℹ️ Campus Info' } },
         { buttonId: 'services', buttonText: { displayText: '🔧 Browse Services' } },
         { buttonId: 'housing', buttonText: { displayText: '🏠 Find Housing' } },
-        { buttonId: 'info', buttonText: { displayText: 'ℹ️ Campus Info' } }
       ],
       footer: "💡 Type '0' to restart • 'menu' for options"
     });
