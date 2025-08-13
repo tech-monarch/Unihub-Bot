@@ -5,25 +5,31 @@ const P = require('pino');
 // ======= Comprehensive Service Data =======
 const SERVICE_CATEGORIES = {
   "📚 Academic Support": {
-    synonyms: ["tutoring", "homework", "assignment", "academic"],
+    synonyms: ["tutor", "homework", "assignment", "study", "academic"],
     description: "Learning assistance and educational resources"
   },
   "💻 Digital Services": {
-    synonyms: ["printing", "design", "video", "digital", "tech"],
+    synonyms: ["print", "design", "video", "tech", "digital"],
     description: "Technology and digital solutions"
   },
-  "🏠 Home Services": {
-    synonyms: ["home", "household"],
-    description: "General home assistance",
-    subcategories: {
-      "🍳 Cooking Services": ["cooking", "meal", "food", "cook"],
-      "🧺 Laundry Services": ["laundry", "wash", "clothes"],
-      "🧹 Home Cleaning": ["cleaning", "clean", "housekeeping"],
-      "💇 Hair Styling": ["hair", "salon", "barber", "hairstyle"]
-    }
+  "🍳 Cooking Services": {
+    synonyms: ["cook", "meal", "food", "chef"],
+    description: "Meal preparation services"
+  },
+  "🧺 Laundry Services": {
+    synonyms: ["laundry", "wash", "clothes", "iron"],
+    description: "Clothing care services"
+  },
+  "🧹 Home Cleaning": {
+    synonyms: ["clean", "cleaning", "housekeeping", "cleaner"],
+    description: "Home and dorm cleaning"
+  },
+  "💇 Hair Styling": {
+    synonyms: ["hair", "salon", "barber", "hairstyle", "braid"],
+    description: "Hair care and styling"
   },
   "🌱 Farming Services": {
-    synonyms: ["farming", "garden", "agriculture", "produce"],
+    synonyms: ["farm", "garden", "agriculture", "produce"],
     description: "Agricultural and gardening services"
   }
 };
@@ -41,21 +47,31 @@ const HOUSING_CATEGORIES = {
     synonyms: ["apartment", "flat"],
     description: "Self-contained private units" 
   },
-  "🏚 Squat": { 
+  "🏚️ Squat": { 
     synonyms: ["squat", "shortstay"],
     description: "Affordable short-term options" 
   }
 };
 
-const ALL_LOCATIONS = [
+const LOCATIONS = [
   "📍 Abuja Campus",
   "📍 Delta Campus",
   "📍 Choba Campus",
   "📍 Alakiah",
-  "📍 Choba",
+  "📍 Choba Town",
   "📍 Ozuoba",
   "📍 Aluu"
 ];
+
+// Campus information database
+const CAMPUS_INFO = {
+  "exam": "📝 *Exam Schedule:*\nNext semester exams begin on December 15th\nResults released January 20th",
+  "exams": "📝 *Exam Schedule:*\nNext semester exams begin on December 15th\nResults released January 20th",
+  "calendar": "🗓️ *Academic Calendar:*\nhttps://unihub.edu/calendar\n\nTrimester Dates:\n- Term 1: Aug 15 - Nov 30\n- Term 2: Jan 10 - Apr 20",
+  "event": "🎉 *Upcoming Events:*\nhttps://unihub.edu/events\n\nThis Week:\n- Tech Fest: Oct 15-17\n- Career Fair: Oct 20",
+  "resource": "📚 *Student Resources:*\nhttps://unihub.edu/resources\n\nAvailable:\n- Library Access\n- Research Databases\n- Tutoring Centers",
+  "cleaner": "🧹 *Cleaning Services:*\nWe offer professional home cleaning services starting at ₦2000/session\n\nBook through: Home Cleaning category"
+};
 
 // ======= Bot Implementation =======
 async function startUniHubBot() {
@@ -101,7 +117,7 @@ async function startUniHubBot() {
     // Initialize new user session
     if (!userSessions[userID]) {
       userSessions[userID] = { step: "welcome", data: {} };
-      return sendWelcomeMessage(userID);
+      return handleInitialMessage(userID, userInput);
     }
 
     const session = userSessions[userID];
@@ -114,9 +130,6 @@ async function startUniHubBot() {
       case "service_category":
         await handleServiceCategory(userID, userInput, session);
         break;
-      case "home_service_subcategory":
-        await handleHomeServiceSubcategory(userID, userInput, session);
-        break;
       case "housing_category":
         await handleHousingCategory(userID, userInput, session);
         break;
@@ -127,193 +140,259 @@ async function startUniHubBot() {
         await handleConfirmation(userID, userInput, session);
         break;
       default:
-        await sendMainMenu(userID);
+        await handleFreeFormQuery(userID, userInput);
     }
   });
 
   // ======= Helper Functions =======
   function helpFooter() {
-    return "\n\n💡 *Quick Help:* Type '0' anytime to restart • 'menu' for main options";
+    return "\n\n💡 *Quick Help:* Type '0' to restart • 'menu' for options";
   }
 
   // ======= Navigation Functions =======
   async function sendMainMenu(userID) {
     userSessions[userID] = { step: "welcome", data: {} };
     
+    // First message: Menu options
     await whatsapp.sendMessage(userID, {
-      text: `📋 *UniHub Main Menu* ${helpFooter()}\n
-1. 📚 *Academic Support* - Tutoring, assignments
-2. 💻 *Digital Services* - Printing, design
-3. 🏠 *Home Services* - Cooking, cleaning, laundry, hair
-4. 🌱 *Farming Services* - Gardening, produce
-5. 🏠 *Housing Solutions* - Hostels, apartments
-6. ℹ️ *Campus Information* - Events, resources`,
+      text: `🌟 *UniHub Main Menu* 🌟\n
+Your campus services assistant:\n
+📚 Academic Support
+💻 Digital Services
+🍳 Cooking Services
+🧺 Laundry Services
+🧹 Home Cleaning
+💇 Hair Styling
+🌱 Farming Services
+🏠 Housing Solutions
+ℹ️ Campus Information`
+    });
+
+    // Second message: Action prompt
+    await whatsapp.sendMessage(userID, {
+      text: `🔍 *How can I assist you today?*\nChoose an option or describe your need:`,
       buttons: [
-        { buttonId: 'services', buttonText: { displayText: '📚 Services' } },
+        { buttonId: 'services', buttonText: { displayText: '🔧 Services' } },
         { buttonId: 'housing', buttonText: { displayText: '🏠 Housing' } },
-        { buttonId: 'help', buttonText: { displayText: '❓ Help' } }
-      ]
+        { buttonId: 'info', buttonText: { displayText: 'ℹ️ Campus Info' } }
+      ],
+      footer: "💡 Type '0' to restart • 'menu' for options"
     });
   }
 
+  async function handleInitialMessage(userID, input) {
+    // Check campus information queries
+    const infoMatch = Object.keys(CAMPUS_INFO).find(key => input.includes(key));
+    if (infoMatch) {
+      return whatsapp.sendMessage(userID, { 
+        text: CAMPUS_INFO[infoMatch] + helpFooter()
+      });
+    }
+
+    // Check service categories
+    const serviceMatch = Object.keys(SERVICE_CATEGORIES).find(service => 
+      SERVICE_CATEGORIES[service].synonyms.some(syn => input.includes(syn))
+    );
+    if (serviceMatch) {
+      userSessions[userID] = {
+        step: "location_selection",
+        data: { 
+          intent: "service",
+          serviceCategory: serviceMatch 
+        }
+      };
+      return sendLocationSelection(userID, "service");
+    }
+    
+    // Check housing categories
+    const housingMatch = Object.keys(HOUSING_CATEGORIES).find(housing => 
+      HOUSING_CATEGORIES[housing].synonyms.some(syn => input.includes(syn))
+    );
+    if (housingMatch) {
+      userSessions[userID] = {
+        step: "location_selection",
+        data: { 
+          intent: "housing",
+          housingCategory: housingMatch 
+        }
+      };
+      return sendLocationSelection(userID, "housing");
+    }
+    
+    // If no direct match, show welcome message
+    return sendWelcomeMessage(userID);
+  }
+
   async function sendWelcomeMessage(userID) {
+    // First message: Welcome text
     await whatsapp.sendMessage(userID, {
-      text: `🌟 *Welcome to UniHub Campus Assistant!* 🌟\n
-I'm here to help you with:\n
-• Academic and digital services 📚💻
-• Home services (cooking, cleaning, laundry, hair) 🏠
-• Farming solutions 🌱
-• Housing arrangements 🏠
-• Campus information ℹ️\n
-${helpFooter().replace("💡", "👇")}`,
+      text: `👋 *Welcome to UniHub Campus Assistant!*\n\nI'm your one-stop solution for campus services and information.`
+    });
+
+    // Second message: Options with footer
+    await whatsapp.sendMessage(userID, {
+      text: `💡 *How can I help you today?*`,
       buttons: [
-        { buttonId: 'services', buttonText: { displayText: '📚 Browse Services' } },
+        { buttonId: 'services', buttonText: { displayText: '🔧 Browse Services' } },
         { buttonId: 'housing', buttonText: { displayText: '🏠 Find Housing' } },
         { buttonId: 'info', buttonText: { displayText: 'ℹ️ Campus Info' } }
-      ]
+      ],
+      footer: "💡 Type '0' to restart • 'menu' for options"
     });
   }
 
   async function handleWelcomeResponse(userID, input, session) {
-    if (input.includes('service') || input.includes('1') || input === 'services') {
+    if (input.includes('service') || input.match(/(1|3|4|5|6|7)/)) {
       session.step = "service_category";
       return sendServiceCategories(userID);
     }
     
-    if (input.includes('housing') || input.includes('5') || input === 'housing') {
+    if (input.includes('housing') || input.includes('8')) {
       session.step = "housing_category";
       return sendHousingCategories(userID);
     }
     
-    if (input.includes('info') || input.includes('6')) {
+    if (input.includes('info') || input.includes('9')) {
+      return handleCampusInfoRequest(userID, input);
+    }
+    
+    // Handle free-form queries
+    return handleFreeFormQuery(userID, input);
+  }
+
+  async function handleFreeFormQuery(userID, input) {
+    // Check campus information first
+    const infoMatch = Object.keys(CAMPUS_INFO).find(key => input.includes(key));
+    if (infoMatch) {
       return whatsapp.sendMessage(userID, { 
-        text: `ℹ️ *Campus Information Center* ${helpFooter()}\n
-• Academic calendar\n• Upcoming events\n• Student resources\n\nWhich information do you need?` 
+        text: CAMPUS_INFO[infoMatch] + helpFooter()
+      });
+    }
+
+    // Check service categories
+    const serviceMatch = Object.keys(SERVICE_CATEGORIES).find(service => 
+      SERVICE_CATEGORIES[service].synonyms.some(syn => input.includes(syn))
+    );
+    if (serviceMatch) {
+      userSessions[userID] = {
+        step: "location_selection",
+        data: { 
+          intent: "service",
+          serviceCategory: serviceMatch 
+        }
+      };
+      return sendLocationSelection(userID, "service");
+    }
+    
+    // Check housing categories
+    const housingMatch = Object.keys(HOUSING_CATEGORIES).find(housing => 
+      HOUSING_CATEGORIES[housing].synonyms.some(syn => input.includes(syn))
+    );
+    if (housingMatch) {
+      userSessions[userID] = {
+        step: "location_selection",
+        data: { 
+          intent: "housing",
+          housingCategory: housingMatch 
+        }
+      };
+      return sendLocationSelection(userID, "housing");
+    }
+    
+    // If no matches found
+    await whatsapp.sendMessage(userID, { 
+      text: `🤔 *I didn't quite catch that*\n\nCould you rephrase? For example:\n• "When do exams start?"\n• "I need cleaning services"\n• "Looking for a hostel"`
+    });
+    
+    await sendMainMenu(userID);
+  }
+
+  async function handleCampusInfoRequest(userID, input) {
+    const infoMatch = Object.keys(CAMPUS_INFO).find(key => input.includes(key));
+    
+    if (infoMatch) {
+      return whatsapp.sendMessage(userID, { 
+        text: CAMPUS_INFO[infoMatch] + helpFooter()
       });
     }
     
-    // Default to services menu for unclear responses
-    session.step = "service_category";
-    await whatsapp.sendMessage(userID, { 
-      text: `🔍 Let's find the service you need: ${helpFooter()}`
+    // First message: Info options
+    await whatsapp.sendMessage(userID, {
+      text: `ℹ️ *Campus Information Center*\n\nAvailable topics:\n• Exam dates\n• Academic calendar\n• Upcoming events\n• Student resources`
     });
-    return sendServiceCategories(userID);
+    
+    // Second message: Prompt with footer
+    await whatsapp.sendMessage(userID, {
+      text: `🔍 *What information do you need?*`,
+      footer: "💡 Type '0' to restart • 'menu' for options"
+    });
   }
 
   async function sendServiceCategories(userID) {
-    let categoriesText = "📋 *Service Categories*\n\n";
-    for (const [category, details] of Object.entries(SERVICE_CATEGORIES)) {
-      const emoji = category.slice(0, 2);
-      const name = category.slice(3);
-      categoriesText += `${emoji} *${name}*: ${details.description}\n`;
-      
-      // Add home service subcategories
-      if (category.includes("Home Services")) {
-        categoriesText += `   └ ${Object.keys(details.subcategories).map(
-          sub => sub.slice(2)
-        ).join(', ')}\n`;
-      }
-    }
-    
+    // First message: Service list
     await whatsapp.sendMessage(userID, {
-      text: `${categoriesText}\n🔍 Select a category: ${helpFooter()}`,
-      buttons: [
-        ...Object.keys(SERVICE_CATEGORIES).map(cat => ({
-          buttonId: `cat_${cat.replace(/\W/g, '')}`,
-          buttonText: { displayText: `${cat.slice(0,2)} ${cat.slice(3).split(' ')[0]}` }
-        })),
-        { buttonId: 'menu', buttonText: { displayText: '📋 Main Menu' } }
-      ]
+      text: `🔧 *Available Services*\n\n${Object.keys(SERVICE_CATEGORIES).map(service => {
+        const emoji = service.slice(0, 2);
+        const name = service.slice(3);
+        return `${emoji} ${name}: ${SERVICE_CATEGORIES[service].description}`;
+      }).join('\n\n')}`
+    });
+
+    // Second message: Prompt with buttons and footer
+    await whatsapp.sendMessage(userID, {
+      text: `👇 *Select a service category:*`,
+      buttons: Object.keys(SERVICE_CATEGORIES).map(service => ({
+        buttonId: `service_${service.replace(/\s+/g, '_')}`,
+        buttonText: { displayText: service.slice(3) }
+      })),
+      footer: "💡 Type '0' to restart • 'menu' for options"
     });
   }
 
   async function handleServiceCategory(userID, input, session) {
-    // Find matching category
-    const categoryMatch = Object.keys(SERVICE_CATEGORIES).find(cat => 
-      cat.toLowerCase().includes(input) || 
-      SERVICE_CATEGORIES[cat].synonyms.some(syn => input.includes(syn))
+    const serviceMatch = Object.keys(SERVICE_CATEGORIES).find(service => 
+      service.toLowerCase().includes(input) || 
+      SERVICE_CATEGORIES[service].synonyms.some(syn => input.includes(syn))
     );
 
-    if (categoryMatch) {
-      // Special handling for home services with subcategories
-      if (categoryMatch.includes("Home Services")) {
-        session.data.serviceCategory = categoryMatch;
-        session.step = "home_service_subcategory";
-        return sendHomeServiceSubcategories(userID);
-      }
-      
-      session.data.serviceCategory = categoryMatch;
+    if (serviceMatch) {
+      session.data.serviceCategory = serviceMatch;
       session.step = "location_selection";
       return sendLocationSelection(userID, "service");
     }
 
     // Handle invalid selection
     await whatsapp.sendMessage(userID, {
-      text: `⚠️ Please select a valid category: ${helpFooter()}`
+      text: `⚠️ *Please select a valid service category*`
     });
     return sendServiceCategories(userID);
   }
 
-  async function sendHomeServiceSubcategories(userID) {
-    const subcategories = SERVICE_CATEGORIES["🏠 Home Services"].subcategories;
-    
-    await whatsapp.sendMessage(userID, {
-      text: `🏠 *Home Service Options* ${helpFooter()}\n\n` +
-        Object.keys(subcategories).map((sub, i) => 
-          `${i+1}. ${sub.slice(2)}`).join('\n'),
-      buttons: [
-        ...Object.keys(subcategories).map(sub => ({
-          buttonId: `sub_${sub.replace(/\W/g, '')}`,
-          buttonText: { displayText: sub.slice(2).split(' ')[0] }
-        })),
-        { buttonId: 'back', buttonText: { displayText: '↩️ Categories' } },
-        { buttonId: 'menu', buttonText: { displayText: '📋 Main Menu' } }
-      ]
-    });
-  }
-
-  async function handleHomeServiceSubcategory(userID, input, session) {
-    const subcategories = SERVICE_CATEGORIES["🏠 Home Services"].subcategories;
-    const subMatch = Object.keys(subcategories).find(sub => 
-      subcategories[sub].some(syn => input.includes(syn))
-    );
-
-    if (subMatch) {
-      session.data.serviceSubcategory = subMatch;
-      session.step = "location_selection";
-      return sendLocationSelection(userID, "service");
-    }
-
-    // Handle invalid selection
-    await whatsapp.sendMessage(userID, {
-      text: `⚠️ Please select a valid home service: ${helpFooter()}`
-    });
-    return sendHomeServiceSubcategories(userID);
-  }
-
   async function sendHousingCategories(userID) {
-    let housingText = "🏠 *Housing Options*\n\n";
-    for (const [category, details] of Object.entries(HOUSING_CATEGORIES)) {
-      const emoji = category.slice(0, 2);
-      const name = category.slice(2);
-      housingText += `${emoji} *${name}*: ${details.description}\n`;
-    }
-    
+    // First message: Housing options
     await whatsapp.sendMessage(userID, {
-      text: `${housingText}\n🔍 Select housing type: ${helpFooter()}`,
-      buttons: [
-        ...Object.keys(HOUSING_CATEGORIES).map(opt => ({
-          buttonId: `housing_${opt.replace(/\W/g, '')}`,
-          buttonText: { displayText: opt.slice(2) }
-        })),
-        { buttonId: 'menu', buttonText: { displayText: '📋 Main Menu' } }
-      ]
+      text: `🏠 *Housing Options*\n\n${Object.keys(HOUSING_CATEGORIES).map(type => {
+        const emoji = type.slice(0, 2);
+        const name = type.slice(2);
+        return `${emoji} ${name}: ${HOUSING_CATEGORIES[type].description}`;
+      }).join('\n\n')}`
+    });
+
+    // Second message: Prompt with buttons and footer
+    await whatsapp.sendMessage(userID, {
+      text: `👇 *Select housing type:*`,
+      buttons: Object.keys(HOUSING_CATEGORIES).map(type => ({
+        buttonId: `housing_${type.replace(/\s+/g, '_')}`,
+        buttonText: { displayText: type.slice(2) }
+      })),
+      footer: "💡 Type '0' to restart • 'menu' for options"
     });
   }
 
   async function handleHousingCategory(userID, input, session) {
-    const housingMatch = Object.keys(HOUSING_CATEGORIES).find(opt => 
-      HOUSING_CATEGORIES[opt].synonyms.some(syn => input.includes(syn))
+    const housingMatch = Object.keys(HOUSING_CATEGORIES).find(type => 
+      type.toLowerCase().includes(input) || 
+      HOUSING_CATEGORIES[type].synonyms.some(syn => input.includes(syn))
     );
 
     if (housingMatch) {
@@ -324,29 +403,32 @@ ${helpFooter().replace("💡", "👇")}`,
 
     // Handle invalid selection
     await whatsapp.sendMessage(userID, {
-      text: `⚠️ Please select valid housing: ${helpFooter()}`
+      text: `⚠️ *Please select valid housing type*`
     });
     return sendHousingCategories(userID);
   }
 
   async function sendLocationSelection(userID, context) {
+    // First message: Location list
     await whatsapp.sendMessage(userID, {
-      text: `📍 Select your ${context === "service" ? "campus" : "housing"} location: ${helpFooter()}`,
-      buttons: [
-        ...ALL_LOCATIONS.map(loc => ({
-          buttonId: `loc_${loc.split(' ')[1]}`,
-          buttonText: { displayText: loc.split(' ')[1] }
-        })),
-        { buttonId: 'back', buttonText: { displayText: '↩️ Back' } },
-        { buttonId: 'menu', buttonText: { displayText: '📋 Main Menu' } }
-      ]
+      text: `📍 *Available Locations*\n\n${LOCATIONS.join('\n')}`
+    });
+
+    // Second message: Prompt with buttons and footer
+    await whatsapp.sendMessage(userID, {
+      text: `🌍 *Select your ${context === "service" ? "campus" : "preferred"} location:*`,
+      buttons: LOCATIONS.map(location => ({
+        buttonId: `loc_${location.replace(/\s+/g, '_')}`,
+        buttonText: { displayText: location.split(' ')[1] }
+      })),
+      footer: "💡 Type '0' to restart • 'menu' for options"
     });
   }
 
   async function handleLocationResponse(userID, input, session) {
-    const locationMatch = ALL_LOCATIONS.find(loc => 
-      input.includes(loc.toLowerCase().split(' ')[1]) ||
-      loc.toLowerCase().includes(input)
+    const locationMatch = LOCATIONS.find(location => 
+      location.toLowerCase().includes(input) || 
+      input.includes(location.toLowerCase().split(' ')[1])
     );
 
     if (locationMatch) {
@@ -357,7 +439,7 @@ ${helpFooter().replace("💡", "👇")}`,
 
     // Handle invalid location
     await whatsapp.sendMessage(userID, {
-      text: `🚫 Location not recognized. Please choose from the list: ${helpFooter()}`
+      text: `⚠️ *Please select a valid location*`
     });
     return sendLocationSelection(userID, 
       session.data.serviceCategory ? "service" : "housing");
@@ -367,56 +449,60 @@ ${helpFooter().replace("💡", "👇")}`,
     let requestDetails = "";
     
     if (data.serviceCategory) {
-      const serviceName = data.serviceSubcategory ? 
-        data.serviceSubcategory.slice(2) : 
-        data.serviceCategory.slice(3);
-        
-      requestDetails = `📦 *Service Request*\n• Service: ${serviceName}\n• Location: ${data.location}`;
+      const emoji = data.serviceCategory.slice(0, 2);
+      const name = data.serviceCategory.slice(3);
+      requestDetails = `🔧 *Service Request*\n\n${emoji} Service: ${name}\n📍 Location: ${data.location.split(' ')[1]}`;
     } else {
-      requestDetails = `🏠 *Housing Request*\n• Type: ${data.housingCategory.slice(2)}\n• Location: ${data.location}`;
+      const emoji = data.housingCategory.slice(0, 2);
+      const name = data.housingCategory.slice(2);
+      requestDetails = `🏠 *Housing Request*\n\n${emoji} Type: ${name}\n📍 Location: ${data.location.split(' ')[1]}`;
     }
 
+    // First message: Request summary
     await whatsapp.sendMessage(userID, {
-      text: `✅ *Please Confirm Your Request* ${helpFooter()}\n\n${requestDetails}\n\nIs this correct?`,
+      text: `✅ *Request Summary*\n\n${requestDetails}\n\nMinimum Provider Rating: ★★★★☆ (4.0+)`
+    });
+
+    // Second message: Confirmation prompt with footer
+    await whatsapp.sendMessage(userID, {
+      text: `❓ *Is this correct?*`,
       buttons: [
-        { buttonId: 'confirm_yes', buttonText: { displayText: '✓ Confirm' } },
-        { buttonId: 'confirm_edit', buttonText: { displayText: '✎ Edit' } },
-        { buttonId: 'confirm_cancel', buttonText: { displayText: '✗ Cancel' } }
-      ]
+        { buttonId: 'confirm_yes', buttonText: { displayText: '✅ Confirm' } },
+        { buttonId: 'confirm_no', buttonText: { displayText: '❌ Cancel' } }
+      ],
+      footer: "💡 Type '0' to restart • 'menu' for options"
     });
   }
 
   async function handleConfirmation(userID, input, session) {
     if (input.includes('yes') || input === 'confirm_yes') {
+      // First message: Confirmation
       await whatsapp.sendMessage(userID, { 
-        text: `🎉 *Request Confirmed!*\nOur verified providers will contact you shortly.\n\nRating Requirement: ★★★★☆ (4.0+)${helpFooter()}`
+        text: `🎉 *Request Confirmed!*\n\nOur team will contact you within 15 minutes\nProvider rating requirement: ★★★★☆+`
       });
+      
+      // Second message: Thank you
+      await whatsapp.sendMessage(userID, { 
+        text: `🙏 *Thank you for using UniHub!*\n\nYour support helps us improve campus services`
+      });
+      
+      // Third message: Return to main menu
+      await sendMainMenu(userID);
+      
+      // Reset session
       userSessions[userID] = { step: "welcome", data: {} };
-      return sendMainMenu(userID);
     } 
-    else if (input.includes('edit') || input === 'confirm_edit') {
-      // Return to appropriate starting point
-      if (session.data.serviceSubcategory) {
-        session.step = "home_service_subcategory";
-        await whatsapp.sendMessage(userID, { text: "↩️ Returning to home services..." });
-        return sendHomeServiceSubcategories(userID);
-      } 
-      else if (session.data.serviceCategory) {
-        session.step = "service_category";
-        await whatsapp.sendMessage(userID, { text: "↩️ Returning to services..." });
-        return sendServiceCategories(userID);
-      }
-      else {
-        session.step = "housing_category";
-        await whatsapp.sendMessage(userID, { text: "↩️ Returning to housing..." });
-        return sendHousingCategories(userID);
-      }
-    }
     else {
+      // First message: Cancellation
       await whatsapp.sendMessage(userID, { 
-        text: "❌ Request cancelled. Let me know if you need anything else."
+        text: `❌ *Request Cancelled*`
       });
-      return sendMainMenu(userID);
+      
+      // Second message: Return to main menu
+      await sendMainMenu(userID);
+      
+      // Reset session
+      userSessions[userID] = { step: "welcome", data: {} };
     }
   }
 }
