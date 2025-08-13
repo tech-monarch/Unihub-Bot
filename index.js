@@ -231,7 +231,7 @@ Your campus services assistant:\n
 
     // Second message: Options with footer
     await whatsapp.sendMessage(userID, {
-      text: `💡 *How can I help you today?*`,
+      text: `💡 *How can I help you today?*\n\nHint - 'menu'`,
       buttons: [
         { buttonId: 'info', buttonText: { displayText: 'ℹ️ Campus Info' } },
         { buttonId: 'services', buttonText: { displayText: '🔧 Browse Services' } },
