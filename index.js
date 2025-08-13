@@ -157,14 +157,14 @@ async function startUniHubBot() {
     await whatsapp.sendMessage(userID, {
       text: `📋 *UniHub Main Menu* ${helpFooter()}\n
 1. Academic Support (tutoring, assignments)
-2. Digital Services (printing, design)
-3. Cooking Services
-4. Laundry Services
-5. Home Cleaning
-6. Hair Styling
-7. Farming Services
-8. Housing Solutions
-9. Campus Information`,
+2. Campus Information/NEWS
+3. Digital Services (printing, design)
+4. Cooking Services
+5. Laundry Services
+6. Home Cleaning
+7. Hair Styling
+8. Farming Services
+9. Lodging/Hostel Solutions`,
       buttons: [
         { buttonId: 'services', buttonText: { displayText: '🔧 Services' } },
         { buttonId: 'housing', buttonText: { displayText: '🏠 Housing' } },
@@ -220,8 +220,8 @@ async function startUniHubBot() {
 
   async function sendWelcomeMessage(userID) {
     await whatsapp.sendMessage(userID, {
-      text: `👋 Welcome to UniHub Campus Assistant!${helpFooter()}\n
-I can help you with:\n- Academic and digital services\n- Home services (cooking, cleaning, laundry, hair)\n- Farming solutions\n- Housing arrangements\n- Campus information\n\nHow can I assist you?`,
+      text: `👋 Welcome to UniHub Campus Assistant!\n
+I can help you with:\n- Academic and digital services\n- Home services (cooking, cleaning, laundry, hair)\n- Farming solutions\n- Housing arrangements\n- Campus information\n\nHow can I assist you?\n\n${helpFooter()}`,
       buttons: [
         { buttonId: 'services', buttonText: { displayText: '🔧 Services' } },
         { buttonId: 'housing', buttonText: { displayText: '🏠 Housing' } },
@@ -313,14 +313,15 @@ I can help you with:\n- Academic and digital services\n- Home services (cooking,
 
   async function sendServiceCategories(userID) {
     await whatsapp.sendMessage(userID, {
-      text: `🔧 Select a service category:${helpFooter()}`,
+      text: `🔧 Select a service category:`,
       buttons: [
         ...Object.keys(SERVICE_CATEGORIES).map(service => ({
           buttonId: `service_${service.replace(/\s+/g, '_')}`,
           buttonText: { displayText: service }
         })),
         { buttonId: 'menu', buttonText: { displayText: '📋 Menu' } }
-      ]
+      ],
+      text: `${helpFooter()}`,
     });
   }
 
