@@ -155,7 +155,7 @@ async function startUniHubBot() {
     userSessions[userID] = { step: "welcome", data: {} };
     
     await whatsapp.sendMessage(userID, {
-      text: `📋 *UniHub Main Menu* ${helpFooter()}\n
+      text: `📋 *UniHub Main Menu* \n
 1. Academic Support (tutoring, assignments)
 2. Campus Information/NEWS
 3. Digital Services (printing, design)
@@ -169,7 +169,8 @@ async function startUniHubBot() {
         { buttonId: 'services', buttonText: { displayText: '🔧 Services' } },
         { buttonId: 'housing', buttonText: { displayText: '🏠 Housing' } },
         { buttonId: 'info', buttonText: { displayText: 'ℹ️ Campus Info' } }
-      ]
+      ],
+      text: `${helpFooter()}\n'
     });
   }
 
