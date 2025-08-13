@@ -170,7 +170,7 @@ async function startUniHubBot() {
         { buttonId: 'housing', buttonText: { displayText: '🏠 Housing' } },
         { buttonId: 'info', buttonText: { displayText: 'ℹ️ Campus Info' } }
       ],
-      text: `${helpFooter()}\n'
+      text: `${helpFooter()}\n`
     });
   }
 
