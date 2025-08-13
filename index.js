@@ -71,7 +71,8 @@ const CAMPUS_INFO = {
   "calendar": "🗓️ Academic calendar: https://unihub.edu/calendar",
   "event": "🎉 Upcoming events: https://unihub.edu/events",
   "resource": "📚 Student resources: https://unihub.edu/resources",
-  "cleaner": "🧹 You can book cleaning services through our Home Cleaning category"
+  "cleaner": "🧹 You can book cleaning services through our Home Cleaning category",
+  "nacos week": "📅 Nacos Week is ongoing! Stay tuned for events and activities."
 };
 
 // ======= Bot Implementation =======
