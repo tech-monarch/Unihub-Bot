@@ -9,7 +9,7 @@ const SERVICE_CATEGORIES = {
     description: "Learning assistance and educational resources"
   },
   "💻 Digital Services": {
-    synonyms: ["printing", "design", "video", "digital", "tech"],
+    synonyms: ["printing", "design", "video", "digital", "tech", "flier", "poster"],
     description: "Technology and digital solutions"
   },
   "🏠 Home Services": {
@@ -19,29 +19,26 @@ const SERVICE_CATEGORIES = {
       "🍳 Cooking Services": ["cooking", "meal", "food", "cook"],
       "🧺 Laundry Services": ["laundry", "wash", "clothes"],
       "🧹 Home Cleaning": ["cleaning", "clean", "housekeeping"],
-      "💇 Hair Styling": ["hair", "salon", "barber", "hairstyle"]
+      "💇 Hair Styling": ["hair", "salon", "barber", "hairstyle"],
+    "🌱 Farming Services":["farming", "garden", "agriculture", "farm"],
     }
-  },
-  "🌱 Farming Services": {
-    synonyms: ["farming", "garden", "agriculture", "produce"],
-    description: "Agricultural and gardening services"
   }
 };
 
 const HOUSING_CATEGORIES = {
-  "🏠 Hostel": { 
+  "- Hostel": { 
     synonyms: ["hostel", "dormitory"],
     description: "Shared living spaces with basic amenities" 
   },
-  "🏘 Lodge": { 
+  "- Lodge": { 
     synonyms: ["lodge", "guesthouse"],
     description: "Private rooms with shared facilities" 
   },
-  "🏢 Apartment": { 
+  "- Apartment": { 
     synonyms: ["apartment", "flat"],
     description: "Self-contained private units" 
   },
-  "🏚 Squat": { 
+  "- Squat": { 
     synonyms: ["squat", "shortstay"],
     description: "Affordable short-term options" 
   }
@@ -141,13 +138,12 @@ async function startUniHubBot() {
     userSessions[userID] = { step: "welcome", data: {} };
     
     await whatsapp.sendMessage(userID, {
-      text: `📋 *UniHub Main Menu* ${helpFooter()}\n
+      text: `📋 *UniHub Main Menu* ${helpFooter()}\n\n
 1. 📚 *Academic Support* - Tutoring, assignments
 2. 💻 *Digital Services* - Printing, design
 3. 🏠 *Home Services* - Cooking, cleaning, laundry, hair
-4. 🌱 *Farming Services* - Gardening, produce
-5. 🏠 *Housing Solutions* - Hostels, apartments
-6. ℹ️ *Campus Information* - Events, resources`,
+4. 🏠 *Housing Solutions* - Hostels, apartments
+5. ℹ️ *Campus Information* - Events, resources`,
       buttons: [
         { buttonId: 'services', buttonText: { displayText: '📚 Services' } },
         { buttonId: 'housing', buttonText: { displayText: '🏠 Housing' } },
@@ -158,12 +154,12 @@ async function startUniHubBot() {
 
   async function sendWelcomeMessage(userID) {
     await whatsapp.sendMessage(userID, {
-      text: `🌟 *Welcome to UniHub Campus Assistant!* 🌟\n
+      text: `🌟 *Welcome to UniHub Campus Assistant!* 🌟\n\n
+
 I'm here to help you with:\n
-• Academic and digital services 📚💻
-• Home services (cooking, cleaning, laundry, hair) 🏠
-• Farming solutions 🌱
-• Housing arrangements 🏠
+• Academic and digital services 📚\n
+• Home services (cooking, cleaning, laundry, hair) 🏠\n
+• Housing arrangements 🏠\n
 • Campus information ℹ️\n
 ${helpFooter().replace("💡", "👇")}`,
       buttons: [
