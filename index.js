@@ -77,13 +77,12 @@ async function startBot() {
     const housing = detectHousingCategory(textRaw)
     const location = detectLocation(textRaw)
 
-    // Fill detected info into session
     if (intent) session.data.intent = intent
     if (service) session.data.service = service
     if (housing) session.data.housing = housing
     if (location) session.data.location = location
 
-    // === If everything is detected, skip menus ===
+    // === Skip menus if all info is there ===
     if ((service || housing) && location) {
       await sock.sendMessage(sender, {
         text: `I understood your request as:\n\nIntent: ${session.data.intent || "unknown"}\nService/Housing: ${service || housing}\nLocation: ${location}\n\nConfirm?`,
@@ -96,11 +95,11 @@ async function startBot() {
       return
     }
 
-    // === Ask only for missing info ===
+    // === Step 1: First interaction / No intent detected ===
     if (!session.data.intent) {
       session.step = "menu"
       await sock.sendMessage(sender, {
-        text: "What do you want to do?",
+        text: `👋 Hi there! Welcome to UniHub 🤝\n\nI'm your campus assistant — here to help you:\n• 📚 Get academic info & support\n• 🛠 Order student-friendly services\n• 🏠 Find housing near campus\n\nWhat would you like to do today?`,
         buttons: [
           { buttonId: "info", buttonText: { displayText: "ℹ️ Get Info" }, type: 1 },
           { buttonId: "services", buttonText: { displayText: "🛠 Order Service" }, type: 1 },
@@ -110,6 +109,7 @@ async function startBot() {
       return
     }
 
+    // === Step 2: Service selection ===
     if (session.data.intent === "services" && !session.data.service) {
       session.step = "selectService"
       await sock.sendMessage(sender, {
@@ -119,6 +119,7 @@ async function startBot() {
       return
     }
 
+    // === Step 3: Housing category selection ===
     if (session.data.intent === "housing" && !session.data.housing) {
       session.step = "selectHousing"
       await sock.sendMessage(sender, {
@@ -128,6 +129,7 @@ async function startBot() {
       return
     }
 
+    // === Step 4: Location selection ===
     if (!session.data.location) {
       session.step = "selectLocation"
       await sock.sendMessage(sender, {
@@ -137,7 +139,7 @@ async function startBot() {
       return
     }
 
-    // === Confirmation ===
+    // === Step 5: Confirmation ===
     if (session.step === "confirm") {
       if (["yes", "y"].includes(textRaw.toLowerCase())) {
         await sock.sendMessage(sender, { text: "✅ Request confirmed! Someone will reach out soon." })
@@ -146,7 +148,18 @@ async function startBot() {
         await sock.sendMessage(sender, { text: "❌ Cancelled. Returning to main menu." })
         userSessions[sender] = { step: "menu", data: {} }
       }
+      return
     }
+
+    // === Fallback ===
+    await sock.sendMessage(sender, {
+      text: `🤔 I’m not sure I got that — here’s what I can help with. Choose an option below:`,
+      buttons: [
+        { buttonId: "info", buttonText: { displayText: "ℹ️ Get Info" }, type: 1 },
+        { buttonId: "services", buttonText: { displayText: "🛠 Order Service" }, type: 1 },
+        { buttonId: "housing", buttonText: { displayText: "🏠 Get Housing" }, type: 1 }
+      ]
+    })
   })
 }
 
