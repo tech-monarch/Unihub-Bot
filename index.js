@@ -1,3 +1,4 @@
+// unihub-bot.js
 require('dotenv').config();
 const {
   makeWASocket,
@@ -8,7 +9,10 @@ const {
 const P = require('pino');
 const qrcode = require('qrcode-terminal');
 
-// ======= Service & Info Data =======
+const Fuse = require('fuse.js');
+const stringSim = require('string-similarity');
+
+// ======= Service & Info Data (unchanged) =======
 const SERVICE_CATEGORIES = {
   "📚 Academic Support": {
     synonyms: ["tutor", "homework", "assignment", "study", "academic", "classmate"],
@@ -84,7 +88,7 @@ const CAMPUS_INFO = {
   "cleaner": "🧹 *Cleaning Services:*\nProfessional home cleaning from ₦2000/session"
 };
 
-// ======= Greeting & Idle Settings =======
+// ======= Greeting & Idle Settings (unchanged) =======
 const greetingsList = [
   "hi", "hello", "hey", "good morning", "good afternoon", "good evening",
   "how far", "wassup", "sup", "what's up", "wetin dey", "good day",
@@ -93,96 +97,202 @@ const greetingsList = [
 const userLastActive = {};
 const IDLE_TIMEOUT = 10 * 60 * 1000; // 10 minutes
 
-// ======= NLP Functions =======
-function detectIntent(userInput) {
-  userInput = userInput.toLowerCase();
-  
-  // Detect reset commands
-  if (["reset", "restart", "start over", "new session"].some(cmd => userInput.includes(cmd))) {
-    return "reset";
-  }
-  
-  // Detect help requests
-  if (["help", "support", "guide", "what can you do"].some(cmd => userInput.includes(cmd))) {
-    return "help";
-  }
-  
-  // Detect service requests
-  if (Object.values(SERVICE_CATEGORIES).some(category => 
-    category.synonyms.some(syn => userInput.includes(syn))
-  )) {
-    return "service";
-  }
-  
-  // Detect housing requests
-  if (Object.values(HOUSING_CATEGORIES).some(category => 
-    category.synonyms.some(syn => userInput.includes(syn))
-  )) {
-    return "housing";
-  }
-  
-  // Detect information requests
-  if (Object.keys(CAMPUS_INFO).some(infoKey => userInput.includes(infoKey)) ||
-     ["info", "information", "news", "update", "schedule", "when", "where", "what"].some(key => userInput.includes(key))
-  ) {
-    return "info";
-  }
-  
-  // Detect service subcategory requests
-  if (["more details", "sub categories", "details about", "options", "types"].some(key => userInput.includes(key))) {
-    return "subcategories";
-  }
-  
-  return "unknown";
+// ======= Sessions store (in-memory; replace with DB for persistence) =======
+const userSessions = {}; // keyed by userID
+
+// ======= Improved NLP / Entity Extraction / Clarify Helpers =======
+
+// small helper to normalize
+function normalizeText(s) {
+  return (s || '').toString().trim().toLowerCase();
+}
+function tokens(text) {
+  return normalizeText(text).split(/\s+/).filter(Boolean);
+}
+function escapeRegExp(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function wordBoundaryRegex(word) {
+  return new RegExp('\\b' + escapeRegExp(normalizeText(word)) + '\\b', 'i');
 }
 
-function extractEntities(userInput) {
-  userInput = userInput.toLowerCase();
-  const entities = {
+// remove the common pin-emoji from locations
+function stripPinEmoji(s) {
+  return (s || '').replace(/📍/g, '').trim();
+}
+
+// build lookup & synonym map
+function buildLookup(svc, house, locs) {
+  const synonymMap = {};
+  const categoryKeys = Object.keys(svc);
+  const housingKeys = Object.keys(house);
+  // map services
+  categoryKeys.forEach(cat => {
+    // map normalized label (without emoji)
+    const labelNoEmoji = cat.replace(/[\u{1F300}-\u{1F6FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '').trim().toLowerCase();
+    synonymMap[labelNoEmoji] = cat;
+    (svc[cat].synonyms || []).forEach(s => synonymMap[normalizeText(s)] = cat);
+    (svc[cat].subcategories || []).forEach(sub => synonymMap[normalizeText(sub)] = cat);
+  });
+  // map housing
+  housingKeys.forEach(cat => {
+    const labelNoEmoji = cat.replace(/[\u{1F300}-\u{1F6FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '').trim().toLowerCase();
+    synonymMap[labelNoEmoji] = cat;
+    (house[cat].synonyms || []).forEach(s => synonymMap[normalizeText(s)] = cat);
+  });
+
+  const cleanLocations = locs.map(l => stripPinEmoji(l));
+  return { synonymMap, categoryKeys, housingKeys, cleanLocations };
+}
+
+const { synonymMap, categoryKeys, housingKeys, cleanLocations } =
+  buildLookup(SERVICE_CATEGORIES, HOUSING_CATEGORIES, LOCATIONS);
+
+// build Fuse index for fuzzy lookup
+const fuseIndex = new Fuse(
+  [
+    ...Object.keys(SERVICE_CATEGORIES).map(k => ({ type: 'service', key: k, label: k, synonyms: (SERVICE_CATEGORIES[k].synonyms || []).join(' | '), sub: (SERVICE_CATEGORIES[k].subcategories || []).join(' | ') })),
+    ...Object.keys(HOUSING_CATEGORIES).map(k => ({ type: 'housing', key: k, label: k, synonyms: (HOUSING_CATEGORIES[k].synonyms || []).join(' | ') })),
+    ...Object.keys(CAMPUS_INFO).map(k => ({ type: 'info', key: k, label: k }))
+  ],
+  {
+    keys: ['label', 'synonyms', 'sub'],
+    threshold: 0.35,
+    ignoreLocation: true,
+    minMatchCharLength: 2
+  }
+);
+
+// return top fuzzy matches (with scores 0..1)
+function matchTop(query, limit = 5) {
+  if (!query || !query.trim()) return [];
+  const qn = normalizeText(query);
+  // exact synonym
+  if (synonymMap[qn]) {
+    const canonical = synonymMap[qn];
+    const type = Object.keys(SERVICE_CATEGORIES).includes(canonical) ? 'service' : (Object.keys(HOUSING_CATEGORIES).includes(canonical) ? 'housing' : 'unknown');
+    return [{ item: { key: canonical, label: canonical, type }, score: 1 }];
+  }
+  const fuseRes = fuseIndex.search(qn).slice(0, limit);
+  return fuseRes.map(r => {
+    const label = (r.item.label || '');
+    const sim = stringSim.compareTwoStrings(qn, normalizeText(label)); // 0..1
+    return { item: r.item, score: Math.max(sim, 1 - r.score) };
+  });
+}
+
+// improved entity extractor
+function extractEntitiesImproved(userInput) {
+  const raw = userInput || '';
+  const text = normalizeText(raw);
+  const result = {
+    intentCandidates: [], // { type, key, label, score }
     serviceType: null,
     housingType: null,
     location: null,
     infoType: null,
     subcategory: null
   };
-  
-  // Extract service type
-entities.serviceType = Object.keys(SERVICE_CATEGORIES).find(category => 
-  SERVICE_CATEGORIES[category].synonyms.some(syn => userInput.includes(syn))
-);
 
-// Extract housing type
-entities.housingType = Object.keys(HOUSING_CATEGORIES).find(category => 
-  HOUSING_CATEGORIES[category].synonyms.some(syn => userInput.includes(syn))
-);
+  // 1) fuzzy candidates
+  const top = matchTop(text, 6);
+  result.intentCandidates = top.map(t => ({ type: t.item.type, key: t.item.key, label: t.item.label, score: t.score }));
 
-// Extract location
-entities.location = LOCATIONS.find(loc => 
-  userInput.includes(loc.replace("📍 ", "").toLowerCase().split(" ")[0])
-);
-
-// Extract info type
-entities.infoType = Object.keys(CAMPUS_INFO).find(infoKey => 
-  userInput.includes(infoKey)
-);
-
-  
-  // Extract subcategory
-for (const category of Object.values(SERVICE_CATEGORIES)) {
-  const foundSub = category.subcategories.find(sub => 
-    userInput.includes(sub.toLowerCase().split(" ")[0])
-  );
-  
-  if (foundSub) {
-    entities.subcategory = foundSub;
-    break;
+  // 2) token synonym direct mapping
+  for (const tok of tokens(text)) {
+    if (synonymMap[tok]) {
+      const canonical = synonymMap[tok];
+      if (Object.keys(SERVICE_CATEGORIES).includes(canonical)) result.serviceType = canonical;
+      else if (Object.keys(HOUSING_CATEGORIES).includes(canonical)) result.housingType = canonical;
+    }
   }
+
+  // 3) location exact / fuzzy
+  for (const loc of cleanLocations) {
+    if (wordBoundaryRegex(loc).test(text)) {
+      result.location = loc;
+      break;
+    }
+  }
+  if (!result.location && text) {
+    const bestLoc = stringSim.findBestMatch(text, cleanLocations);
+    if (bestLoc && bestLoc.bestMatch && bestLoc.bestMatch.rating > 0.3) result.location = bestLoc.bestMatch.target;
+  }
+
+  // 4) campus info
+  for (const key of Object.keys(CAMPUS_INFO)) {
+    if (wordBoundaryRegex(key).test(text)) {
+      result.infoType = key;
+      break;
+    }
+  }
+
+  // 5) subcategory detection
+  for (const [catKey, catObj] of Object.entries(SERVICE_CATEGORIES)) {
+    for (const sub of (catObj.subcategories || [])) {
+      if (wordBoundaryRegex(sub).test(text) || text.includes(normalizeText(sub))) {
+        result.subcategory = sub;
+        result.serviceType = catKey;
+        break;
+      }
+    }
+    if (result.subcategory) break;
+  }
+
+  // 6) fallback to top candidate
+  if (!result.serviceType && !result.housingType && result.intentCandidates.length) {
+    const best = result.intentCandidates[0];
+    if (best.score > 0.45) {
+      if (best.type === 'service') result.serviceType = best.key;
+      if (best.type === 'housing') result.housingType = best.key;
+      if (best.type === 'info') result.infoType = best.key;
+    }
+  }
+
+  return result;
 }
 
-  return entities;
+// intent detection with confidence / clarify
+function detectIntentImproved(userInput) {
+  const ent = extractEntitiesImproved(userInput);
+  const t = normalizeText(userInput);
+
+  // quick explicit commands
+  if (/\b(reset|restart|start over|new session)\b/.test(t)) return { intent: 'reset', confidence: 1 };
+  if (/\b(help|support|guide|what can you do|assist)\b/.test(t)) return { intent: 'help', confidence: 1 };
+  if (/\b(menu|main menu)\b/.test(t)) return { intent: 'menu', confidence: 1 };
+  if (/\b(yes|confirm|✅|confirm)\b/.test(t) && userSessions && userSessions.__lastClarify) return { intent: 'confirm', confidence: 1 };
+  if (/\b(no|edit|change|❌|cancel)\b/.test(t) && userSessions && userSessions.__lastClarify) return { intent: 'decline', confidence: 1 };
+
+  if (ent.infoType) return { intent: 'info', confidence: 0.95, infoType: ent.infoType };
+  if (ent.serviceType) return { intent: 'service', confidence: 0.9, serviceType: ent.serviceType };
+  if (ent.housingType) return { intent: 'housing', confidence: 0.9, housingType: ent.housingType };
+  if (ent.location && /\b(find|book|search|need|want|looking)\b/.test(t)) return { intent: 'service', confidence: 0.7, location: ent.location };
+
+  if (ent.intentCandidates && ent.intentCandidates.length) {
+    const top = ent.intentCandidates.slice(0, 3);
+    return { intent: 'clarify', confidence: 0.45, candidates: top };
+  }
+
+  return { intent: 'unknown', confidence: 0.0 };
 }
 
-// ======= Bot Implementation =======
+// build clarify message for user
+function buildClarifyMessage(candidates) {
+  const opts = candidates.map((c, i) => {
+    const label = c.label || c.item?.label || c.key;
+    const type = c.type || c.item?.type || 'option';
+    return { id: String(i + 1), label, type, score: c.score || 0 };
+  });
+  const text = [
+    "I wasn't sure which one you meant — please pick an option by number or type the option name:",
+    ...opts.map(o => `${o.id}. ${o.label} (${o.type})`)
+  ].join('\n');
+  return { text, options: opts };
+}
+
+// ======= Bot Implementation (Baileys + flow) =======
+
 async function startUniHubBot() {
   const { state, saveCreds } = await useMultiFileAuthState('./session');
   const { version } = await fetchLatestBaileysVersion();
@@ -193,8 +303,6 @@ async function startUniHubBot() {
     logger: P({ level: 'silent' }),
     browser: ["UniHub", "Chrome", "110.0"],
   });
-
-  const userSessions = {};
 
   whatsapp.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
@@ -216,94 +324,183 @@ async function startUniHubBot() {
     if (!msg.message || msg.key.fromMe) return;
 
     const userID = msg.key.remoteJid;
-    const userInput = (
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text ||
-      ""
-    ).trim().toLowerCase();
+    // handle different incoming message shapes
+    let userInput = "";
+    if (msg.message.conversation) userInput = msg.message.conversation;
+    else if (msg.message.extendedTextMessage?.text) userInput = msg.message.extendedTextMessage.text;
+    else if (msg.message.buttonsResponseMessage?.selectedButtonId) userInput = msg.message.buttonsResponseMessage.selectedButtonId;
+    else if (msg.message.listResponseMessage?.singleSelectReply?.selectedRowId) userInput = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
+    userInput = (userInput || "").toString().trim();
 
     if (!userInput) return;
-    await handleSmartMessage(userID, userInput);
+    await handleSmartMessage(whatsapp, userID, userInput, msg);
   });
 
-  async function handleSmartMessage(userID, userInput) {
+  // main message handler
+  async function handleSmartMessage(whatsapp, userID, userInput, rawMsg) {
     const now = Date.now();
     const lastActive = userLastActive[userID] || 0;
     const idleTooLong = (now - lastActive) > IDLE_TIMEOUT;
     userLastActive[userID] = now;
 
-    const isGreeting = greetingsList.some(g => userInput.includes(g));
+    const isGreeting = greetingsList.some(g => normalizeText(userInput).includes(normalizeText(g)));
 
-    // Initialize session if needed
+    // initialize session if needed
     if (!userSessions[userID]) {
-      userSessions[userID] = { 
-        state: "welcome", 
-        context: {},
-        lastAction: now
-      };
+      userSessions[userID] = { state: "welcome", context: {}, lastAction: now, lastClarify: null };
     }
-    
     const session = userSessions[userID];
     session.lastAction = now;
-    
-    // Handle greetings or idle reset
+
+    // greetings / idle reset
     if (isGreeting || idleTooLong) {
-      let matchedGreeting = greetingsList.find(g => userInput.includes(g)) || "Hello";
+      let matchedGreeting = greetingsList.find(g => normalizeText(userInput).includes(normalizeText(g))) || "Hello";
       matchedGreeting = matchedGreeting.charAt(0).toUpperCase() + matchedGreeting.slice(1);
       await whatsapp.sendMessage(userID, { text: `${matchedGreeting}! 👋` });
       session.state = "welcome";
-      return sendMainMenu(userID);
+      session.context = {};
+      session.lastClarify = null;
+      return sendMainMenu(whatsapp, userID);
     }
 
-    // Detect user intent
-    const intent = detectIntent(userInput);
-    const entities = extractEntities(userInput);
-    
-    // Handle reset command
-    if (intent === "reset") {
-      userSessions[userID] = { state: "welcome", context: {} };
-      await whatsapp.sendMessage(userID, { text: "🔄 Session reset! Starting fresh..." });
-      return sendMainMenu(userID);
+    // if we're in a clarify state, process numeric picks or typed options first
+    if (session.state === 'clarify' && session.lastClarify) {
+      const handled = await handleClarifyResponse(whatsapp, userID, userInput, session);
+      if (handled) return;
+      // if not handled, fall through to intent detection
     }
-    
-    // Handle help command
-    if (intent === "help") {
+
+    // detect intent using improved function
+    const intentRes = detectIntentImproved(userInput);
+    const entities = extractEntitiesImproved(userInput);
+
+    // explicit resets / help
+    if (intentRes.intent === "reset") {
+      userSessions[userID] = { state: "welcome", context: {}, lastAction: now, lastClarify: null };
+      await whatsapp.sendMessage(userID, { text: "🔄 Session reset! Starting fresh..." });
+      return sendMainMenu(whatsapp, userID);
+    }
+    if (intentRes.intent === "help") {
       return whatsapp.sendMessage(userID, {
         text: `🆘 *UniHub Help Center*\n\nI can help you with:\n- Service booking\n- Housing search\n- Campus information\n\nTry:\n• "Book cleaning service"\n• "Find hostels near me"\n• "When are exams?"\n\nType *menu* anytime for options!`
       });
     }
-    
-    // Handle based on current state
+    if (intentRes.intent === "menu") {
+      session.state = 'welcome';
+      session.context = {};
+      session.lastClarify = null;
+      return sendMainMenu(whatsapp, userID);
+    }
+
+    // route by current state
     switch (session.state) {
       case "welcome":
-        await handleWelcomeState(userID, userInput, intent, entities, session);
+        await handleWelcomeState(whatsapp, userID, userInput, intentRes, entities, session);
         break;
       case "service":
-        await handleServiceState(userID, userInput, intent, entities, session);
+        await handleServiceState(whatsapp, userID, userInput, intentRes, entities, session);
         break;
       case "housing":
-        await handleHousingState(userID, userInput, intent, entities, session);
-        break;
-      case "info":
-        await handleInfoState(userID, userInput, intent, entities, session);
+        await handleHousingState(whatsapp, userID, userInput, intentRes, entities, session);
         break;
       case "ask_details":
-        await handleDetailsState(userID, userInput, session);
+        await handleDetailsState(whatsapp, userID, userInput, session);
         break;
       case "ask_address":
-        await handleAddressState(userID, userInput, session);
+        await handleAddressState(whatsapp, userID, userInput, session);
+        break;
+      case "confirmation":
+        await handleConfirmationState(whatsapp, userID, userInput, rawMsg, session);
         break;
       default:
-        await handleUnknownState(userID, userInput, session);
+        await handleUnknownState(whatsapp, userID, userInput, session);
     }
   }
 
-  async function handleWelcomeState(userID, userInput, intent, entities, session) {
-    // Handle information requests immediately
-    if (intent === "info" || entities.infoType) {
-      const infoType = entities.infoType || Object.keys(CAMPUS_INFO).find(key => 
-        userInput.includes(key))
-      
+  // Clarify response handler: returns true if handled
+  async function handleClarifyResponse(whatsapp, userID, userInput, session) {
+    const last = session.lastClarify;
+    if (!last || !last.options) return false;
+    const pick = normalizeText(userInput);
+
+    // numeric pick
+    const numeric = pick.match(/^(\d+)$/);
+    if (numeric) {
+      const idx = parseInt(numeric[1], 10) - 1;
+      if (last.options[idx]) {
+        const choice = last.options[idx];
+        session.lastClarify = null;
+        session.state = 'welcome'; // will be changed below by handlers
+        // route
+        if (choice.type === 'service') {
+          session.state = 'service';
+          session.context = { type: choice.label };
+          return handleServiceState(whatsapp, userID, '', null, null, session);
+        } else if (choice.type === 'housing') {
+          session.state = 'housing';
+          session.context = { type: choice.label };
+          return handleHousingState(whatsapp, userID, '', null, null, session);
+        } else if (choice.type === 'info') {
+          await whatsapp.sendMessage(userID, { text: CAMPUS_INFO[choice.label] || `Here is info about ${choice.label}` });
+          return sendMainMenu(whatsapp, userID);
+        }
+      } else {
+        await whatsapp.sendMessage(userID, { text: "Invalid option number. Please pick a number from the list." });
+        return true;
+      }
+    }
+
+    // typed name — exact first, then fuzzy
+    const exact = last.options.find(o => normalizeText(o.label) === pick);
+    if (exact) {
+      session.lastClarify = null;
+      session.state = 'welcome';
+      if (exact.type === 'service') {
+        session.state = 'service';
+        session.context = { type: exact.label };
+        return handleServiceState(whatsapp, userID, '', null, null, session);
+      } else if (exact.type === 'housing') {
+        session.state = 'housing';
+        session.context = { type: exact.label };
+        return handleHousingState(whatsapp, userID, '', null, null, session);
+      } else if (exact.type === 'info') {
+        await whatsapp.sendMessage(userID, { text: CAMPUS_INFO[exact.label] || `Here is info about ${exact.label}` });
+        return sendMainMenu(whatsapp, userID);
+      }
+    }
+
+    // fuzzy match against option labels
+    const names = last.options.map(o => o.label);
+    const best = stringSim.findBestMatch(pick, names);
+    if (best.bestMatch.rating > 0.4) {
+      const idx = names.indexOf(best.bestMatch.target);
+      const choice = last.options[idx];
+      session.lastClarify = null;
+      session.state = 'welcome';
+      if (choice.type === 'service') {
+        session.state = 'service';
+        session.context = { type: choice.label };
+        return handleServiceState(whatsapp, userID, '', null, null, session);
+      } else if (choice.type === 'housing') {
+        session.state = 'housing';
+        session.context = { type: choice.label };
+        return handleHousingState(whatsapp, userID, '', null, null, session);
+      } else if (choice.type === 'info') {
+        await whatsapp.sendMessage(userID, { text: CAMPUS_INFO[choice.label] || `Here is info about ${choice.label}` });
+        return sendMainMenu(whatsapp, userID);
+      }
+    }
+
+    // not recognized
+    await whatsapp.sendMessage(userID, { text: "I didn't recognize that option. Please reply with the number shown (e.g., 1)." });
+    return true;
+  }
+
+  // welcome state handler
+  async function handleWelcomeState(whatsapp, userID, userInput, intentRes, entities, session) {
+    // immediate info
+    if (intentRes.intent === "info" || entities.infoType) {
+      const infoType = entities.infoType || intentRes.infoType || Object.keys(CAMPUS_INFO).find(key => normalizeText(userInput).includes(key));
       if (infoType && CAMPUS_INFO[infoType]) {
         await whatsapp.sendMessage(userID, { text: CAMPUS_INFO[infoType] });
       } else {
@@ -311,120 +508,135 @@ async function startUniHubBot() {
           text: "ℹ️ *Campus Information*\nWhat would you like to know?\n- Exam schedules\n- Academic calendar\n- Upcoming events\n- Student resources"
         });
       }
-      return sendMainMenu(userID);
+      return sendMainMenu(whatsapp, userID);
     }
-    
-    // Transition to service state
-    if (intent === "service" || entities.serviceType) {
+
+    // service transitions
+    if (intentRes.intent === "service" || entities.serviceType) {
+      // if low confidence but there are multiple candidates -> clarify
+      if (intentRes.intent === 'clarify' && intentRes.candidates) {
+        const clar = buildClarifyMessage(intentRes.candidates);
+        session.lastClarify = clar.options;
+        session.state = 'clarify';
+        await whatsapp.sendMessage(userID, { text: clar.text });
+        return;
+      }
+
       session.state = "service";
       session.context = {
-        type: entities.serviceType || "General Service",
-        location: entities.location || null
+        type: entities.serviceType || intentRes.serviceType || "General Service",
+        location: entities.location || intentRes.location || null
       };
-      
+
       let response = `🔧 Setting up your ${session.context.type} request...`;
       if (session.context.location) {
         response += `\n📍 Location: ${session.context.location}`;
       } else {
         response += "\n🌍 Please tell me your location (e.g., Choba Campus)";
       }
-      
+
       await whatsapp.sendMessage(userID, { text: response });
       return;
     }
-    
-    // Transition to housing state
-    if (intent === "housing" || entities.housingType) {
+
+    // housing transitions
+    if (intentRes.intent === "housing" || entities.housingType) {
+      if (intentRes.intent === 'clarify' && intentRes.candidates) {
+        const clar = buildClarifyMessage(intentRes.candidates);
+        session.lastClarify = clar.options;
+        session.state = 'clarify';
+        await whatsapp.sendMessage(userID, { text: clar.text });
+        return;
+      }
+
       session.state = "housing";
       session.context = {
-        type: entities.housingType || "General Housing",
-        location: entities.location || null
+        type: entities.housingType || intentRes.housingType || "General Housing",
+        location: entities.location || intentRes.location || null
       };
-      
+
       let response = `🏠 Setting up your ${session.context.type} search...`;
       if (session.context.location) {
         response += `\n📍 Location: ${session.context.location}`;
       } else {
         response += "\n🌍 Please tell me your preferred location (e.g., Abuja Campus)";
       }
-      
+
       await whatsapp.sendMessage(userID, { text: response });
       return;
     }
-    
-    // Handle subcategory requests
-    if (intent === "subcategories") {
-      const matchedCategory = Object.keys(SERVICE_CATEGORIES).find(cat =>
-        userInput.includes(cat.toLowerCase().split(" ")[1]))
-      
-      if (matchedCategory) {
-        return whatsapp.sendMessage(userID, {
-          text: `📋 *${matchedCategory}*\n${SERVICE_CATEGORIES[matchedCategory].description}\n\nSubcategories:\n- ${SERVICE_CATEGORIES[matchedCategory].subcategories.join("\n- ")}`
-        });
-      }
+
+    // subcategories request
+    if (intentRes.intent === "clarify" && intentRes.candidates) {
+      const clar = buildClarifyMessage(intentRes.candidates);
+      session.lastClarify = clar.options;
+      session.state = 'clarify';
+      await whatsapp.sendMessage(userID, { text: clar.text });
+      return;
     }
-    
-    // Fallback to main menu
+
+    // fallback main menu
     await whatsapp.sendMessage(userID, {
       text: "🤔 I didn't quite catch that. Let me show you what I can help with:"
     });
-    return sendMainMenu(userID);
+    return sendMainMenu(whatsapp, userID);
   }
 
-  async function handleServiceState(userID, userInput, intent, entities, session) {
-    // Update context with new entities
+  // service state handler
+  async function handleServiceState(whatsapp, userID, userInput, intentRes, entities, session) {
+    // update context from entities
     if (entities.serviceType) session.context.type = entities.serviceType;
     if (entities.location) session.context.location = entities.location;
     if (entities.subcategory) session.context.subcategory = entities.subcategory;
-    
-    // Handle location missing
+
+    // ask for location if missing
     if (!session.context.location) {
       await whatsapp.sendMessage(userID, {
         text: "🌍 Please tell me where you need this service (e.g., Choba Campus, Abuja Campus)"
       });
       return;
     }
-    
-    // Handle subcategory selection
+
+    // if we don't have subcategory, show options
     if (!session.context.subcategory && session.context.type) {
       const category = SERVICE_CATEGORIES[session.context.type];
       if (category && category.subcategories) {
-        await whatsapp.sendMessage(userID, {
-          text: `🔍 *${session.context.type} Options*\n\nPlease choose a subcategory:\n- ${category.subcategories.join("\n- ")}`,
-          footer: "Type the name of the option you want"
-        });
+        const msg = `🔍 *${session.context.type} Options*\n\nPlease choose a subcategory:\n- ${category.subcategories.join("\n- ")}`;
+        await whatsapp.sendMessage(userID, { text: msg, footer: "Type the name of the option you want" });
+        // store lastClarify so the next message can type subcategory or pick fuzzy
+        session.lastClarify = category.subcategories.map((s, i) => ({ id: String(i+1), label: s, type: 'service', score: 1 }));
+        session.state = 'clarify';
         return;
       }
     }
-    
-    // Move to details collection
+
+    // proceed to details collection
     session.state = "ask_details";
     await whatsapp.sendMessage(userID, {
       text: `✏️ Tell me more about your ${session.context.subcategory || session.context.type} needs:\n• Specific requirements\n• Preferred time\n• Budget range\n• Any other details`
     });
   }
 
-  async function handleHousingState(userID, userInput, intent, entities, session) {
-    // Update context with new entities
+  // housing state handler
+  async function handleHousingState(whatsapp, userID, userInput, intentRes, entities, session) {
     if (entities.housingType) session.context.type = entities.housingType;
     if (entities.location) session.context.location = entities.location;
-    
-    // Handle location missing
+
     if (!session.context.location) {
       await whatsapp.sendMessage(userID, {
         text: "🌍 Please tell me your preferred location (e.g., Abuja Campus, Choba Town)"
       });
       return;
     }
-    
-    // Move to details collection
+
     session.state = "ask_details";
     await whatsapp.sendMessage(userID, {
       text: `✏️ Tell me more about your ${session.context.type} needs:\n• Number of rooms\n• Price range\n• Move-in date\n• Any special requirements`
     });
   }
 
-  async function handleDetailsState(userID, userInput, session) {
+  // collect details
+  async function handleDetailsState(whatsapp, userID, userInput, session) {
     session.context.details = userInput;
     session.state = "ask_address";
     await whatsapp.sendMessage(userID, {
@@ -432,27 +644,19 @@ async function startUniHubBot() {
     });
   }
 
-  async function handleAddressState(userID, userInput, session) {
+  // collect address -> confirmation
+  async function handleAddressState(whatsapp, userID, userInput, session) {
     session.context.address = userInput;
-    
-    // Format confirmation message
+
+    // build confirmation text
     let confirmation = `✅ *Request Summary*\n\n`;
-    
-    if (session.context.type) {
-      confirmation += `🔧 *Service:* ${session.context.type}\n`;
-    }
-    if (session.context.subcategory) {
-      confirmation += `📋 *Subcategory:* ${session.context.subcategory}\n`;
-    }
-    if (session.context.location) {
-      confirmation += `📍 *Location:* ${session.context.location}\n`;
-    }
-    if (session.context.details) {
-      confirmation += `📝 *Details:* ${session.context.details}\n`;
-    }
+    if (session.context.type) confirmation += `🔧 *Service:* ${session.context.type}\n`;
+    if (session.context.subcategory) confirmation += `📋 *Subcategory:* ${session.context.subcategory}\n`;
+    if (session.context.location) confirmation += `📍 *Location:* ${session.context.location}\n`;
+    if (session.context.details) confirmation += `📝 *Details:* ${session.context.details}\n`;
     confirmation += `🏠 *Address:* ${session.context.address}\n\n`;
     confirmation += "Is this correct?";
-    
+
     await whatsapp.sendMessage(userID, {
       text: confirmation,
       buttons: [
@@ -460,60 +664,78 @@ async function startUniHubBot() {
         { buttonId: 'confirm_no', buttonText: { displayText: '❌ Edit' } }
       ]
     });
-    
+
     session.state = "confirmation";
   }
 
-  async function sendMainMenu(userID) {
+  // handle confirmation (button or typed)
+  async function handleConfirmationState(whatsapp, userID, userInput, rawMsg, session) {
+    // check if message was a ButtonsResponse or typed
+    const msg = rawMsg?.message || {};
+    const buttonId = msg.buttonsResponseMessage?.selectedButtonId || null;
+    const listId = msg.listResponseMessage?.singleSelectReply?.selectedRowId || null;
+    const text = normalizeText(userInput);
+
+    const accepted = buttonId === 'confirm_yes' || text.match(/\b(yes|confirm|okay|ok|✅)\b/);
+    const declined = buttonId === 'confirm_no' || text.match(/\b(no|edit|change|❌|cancel)\b/);
+
+    if (accepted) {
+      // simulate saving the request (hook here to DB)
+      const reqId = `REQ-${Date.now().toString().slice(-6)}`;
+      await whatsapp.sendMessage(userID, { text: `🎉 Request submitted successfully! Your request ID is *${reqId}*. We'll contact you shortly.` });
+
+      // reset session
+      session.state = 'welcome';
+      session.context = {};
+      session.lastClarify = null;
+      return sendMainMenu(whatsapp, userID);
+    }
+
+    if (declined) {
+      // let user edit details (simple: go back to details collection)
+      session.state = 'ask_details';
+      await whatsapp.sendMessage(userID, { text: "Okay — what would you like to change? Tell me the updated details." });
+      return;
+    }
+
+    // otherwise ask the user to respond with confirm/edit
+    await whatsapp.sendMessage(userID, { text: "Please press ✅ Confirm to submit or ❌ Edit to make changes." });
+  }
+
+  // unknown state fallback
+  async function handleUnknownState(whatsapp, userID, userInput, session) {
+    const intent = detectIntentImproved(userInput);
+    const entities = extractEntitiesImproved(userInput);
+    if (intent.intent !== "unknown") {
+      session.state = "welcome";
+      return handleWelcomeState(whatsapp, userID, userInput, intent, entities, session);
+    }
+
+    await whatsapp.sendMessage(userID, {
+      text: "🤔 I'm not sure what you need. Here are some things I can help with:"
+    });
+    return sendMainMenu(whatsapp, userID);
+  }
+
+  // send main menu helper
+  async function sendMainMenu(whatsapp, userID) {
     const session = userSessions[userID] || {};
     session.state = "welcome";
     session.context = {};
-    
+    session.lastClarify = null;
+    userSessions[userID] = session;
+
     await whatsapp.sendMessage(userID, {
       text: `🌟 *UniHub Main Menu* 🌟\n\nYour campus services assistant:\n\n` +
         `ℹ️ Campus Information/NEWS\n📚 Academic Support\n💻 Digital Services\n🍳 Cooking Services\n` +
         `🧺 Laundry Services\n🧹 Home Cleaning\n💇 Hair Styling\n🌱 Farming Services\n🏠 Housing Solutions`
     });
-    
+
     await whatsapp.sendMessage(userID, {
       text: `🔍 *How can I help you today?*\nExamples:\n• "Book cleaning in Choba"\n• "Find hostels near Abuja Campus"\n• "When are exams?"\n\n` +
         `💡 *Quick Help:* Type 'help' for assistance or 'menu' anytime`,
       footer: "UniHub - Your Campus Concierge"
     });
-  }
-
-  async function handleInfoState(userID, userInput, intent, entities, session) {
-    const infoType = entities.infoType || Object.keys(CAMPUS_INFO).find(key => 
-      userInput.includes(key))
-    
-    if (infoType && CAMPUS_INFO[infoType]) {
-      await whatsapp.sendMessage(userID, { text: CAMPUS_INFO[infoType] });
-    } else {
-      await whatsapp.sendMessage(userID, {
-        text: "ℹ️ *Campus Information Center*\n\nAvailable topics:\n• Exam schedules\n• Academic calendar\n• Upcoming events\n• Student resources\n\nWhat would you like to know?"
-      });
-    }
-    
-    // Return to main menu
-    return sendMainMenu(userID);
-  }
-
-  async function handleUnknownState(userID, userInput, session) {
-    // Try to detect intent again
-    const intent = detectIntent(userInput);
-    const entities = extractEntities(userInput);
-    
-    if (intent !== "unknown") {
-      // Reset to welcome state if we can detect something
-      session.state = "welcome";
-      return handleWelcomeState(userID, userInput, intent, entities, session);
-    }
-    
-    // If still unknown, show help
-    await whatsapp.sendMessage(userID, {
-      text: "🤔 I'm not sure what you need. Here are some things I can help with:"
-    });
-    return sendMainMenu(userID);
   }
 }
 
